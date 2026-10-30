@@ -1,0 +1,247 @@
+# Variante para Coolify v4. Véase COOLIFY.md antes del primer despliegue.
+# SPIRE y el harness elegido por el escritorio se omiten deliberadamente.
+# La red default tiene nombre explícito para los contenedores creados por el supervisor.
+# Sin puertos publicados: asignar el dominio a server, puerto interno 3001.
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: openbot
+      POSTGRES_USER: openbot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    volumes:
+    - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - pg_isready -U openbot -d openbot
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+    - data
+  migrate:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: ${SERVER_IMAGE:-openbot-server:latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-build}
+    command:
+    - bun
+    - scripts/migrate.ts
+    environment:
+      DATABASE_URL: postgres://openbot:${POSTGRES_PASSWORD:-}@postgres:5432/openbot
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+    networks:
+    - data
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: ${SERVER_IMAGE:-openbot-server:latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-build}
+    environment:
+      PORT: '3001'
+      SERVER_PORT: '3001'
+      NODE_ENV: production
+      DATABASE_URL: postgres://openbot:${POSTGRES_PASSWORD:-}@postgres:5432/openbot
+      AGENT_COMPUTER_URL: http://agent-computer:4100
+      COMPUTER_SUPERVISOR_URL: http://supervisor:4300
+      MANAGED_AGENT_AG_UI_URL: http://agent-langgraph:4201/ag-ui
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      INTELLIGENCE_API_URL: ${INTELLIGENCE_API_URL:-https://api.intelligence.copilotkit.ai}
+      INTELLIGENCE_GATEWAY_WS_URL: ${INTELLIGENCE_GATEWAY_WS_URL:-wss://realtime.intelligence.copilotkit.ai}
+      INTELLIGENCE_BROWSER_GATEWAY_WS_URL: ${INTELLIGENCE_BROWSER_GATEWAY_WS_URL:-}
+      AGENT_TOOL_TOKEN: ${AGENT_TOOL_TOKEN:-}
+      COMPUTER_TOKEN: ${COMPUTER_TOKEN:-}
+      KEY_ENCRYPTION_KEY: ${KEY_ENCRYPTION_KEY:-}
+      MANAGED_AGENT_TOKEN: ${MANAGED_AGENT_TOKEN:-}
+      SUPERVISOR_TOKEN: ${SUPERVISOR_TOKEN:-}
+      WORKER_SHARED_SECRET: ${WORKER_SHARED_SECRET:-}
+      INTELLIGENCE_API_KEY: ${INTELLIGENCE_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      CPK_INTELLIGENCE_API_KEY: ${CPK_INTELLIGENCE_API_KEY:-}
+      COPILOTKIT_LICENSE_TOKEN: ${COPILOTKIT_LICENSE_TOKEN:-}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-}
+      INITIAL_ADMIN_EMAILS: ${INITIAL_ADMIN_EMAILS:-}
+      TRUSTED_ORIGINS: ${TRUSTED_ORIGINS:-}
+      OPENBOT_PUBLIC_URL: ${OPENBOT_PUBLIC_URL:-}
+      SIGNIN_ALLOWED_EMAIL_DOMAINS: ${SIGNIN_ALLOWED_EMAIL_DOMAINS:-}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      MICROSOFT_OAUTH_CLIENT_ID: ${MICROSOFT_OAUTH_CLIENT_ID:-}
+      MICROSOFT_OAUTH_CLIENT_SECRET: ${MICROSOFT_OAUTH_CLIENT_SECRET:-}
+      MICROSOFT_OAUTH_TENANT_ID: ${MICROSOFT_OAUTH_TENANT_ID:-}
+      OKTA_OAUTH_CLIENT_ID: ${OKTA_OAUTH_CLIENT_ID:-}
+      OKTA_OAUTH_CLIENT_SECRET: ${OKTA_OAUTH_CLIENT_SECRET:-}
+      OKTA_OAUTH_ISSUER: ${OKTA_OAUTH_ISSUER:-}
+      OPENBOT_ORGANIZATION_AUTH_URL: ${OPENBOT_ORGANIZATION_AUTH_URL:-}
+      COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:-}
+      CPK_INTELLIGENCE_LEARNING_CONTAINER_ID: ${CPK_INTELLIGENCE_LEARNING_CONTAINER_ID:-}
+      CPK_INTELLIGENCE_SKILLS_REVISION: ${CPK_INTELLIGENCE_SKILLS_REVISION:-}
+      DEPLOYMENT_ID: ${DEPLOYMENT_ID:-}
+      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-}
+      OPENBOT_SINGLE_USER: 'false'
+    user: ${OPENBOT_SERVER_USER:-1001:1001}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      supervisor:
+        condition: service_healthy
+      agent-langgraph:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - 'bun -e "const r = await fetch(''http://127.0.0.1:3001/health''); process.exit(r.ok
+        ? 0 : 1)"'
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+    - data
+    - default
+    expose:
+    - '3001'
+  worker:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: ${SERVER_IMAGE:-openbot-server:latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-build}
+    command:
+    - bun
+    - ../worker/src/index.ts
+    environment:
+      DATABASE_URL: postgres://openbot:${POSTGRES_PASSWORD:-}@postgres:5432/openbot
+      SERVER_INTERNAL_URL: http://server:3001
+      WORKER_SHARED_SECRET: ${WORKER_SHARED_SECRET:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+    - data
+  agent-computer:
+    build:
+      context: .
+      dockerfile: agent-computer/Dockerfile
+    image: ${COMPUTER_IMAGE:-openbot-agent-computer:latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-build}
+    environment:
+      COMPUTER_TOKEN: ${COMPUTER_TOKEN:-}
+      COMPUTER_BROWSER_MODE: ${COMPUTER_BROWSER_MODE:-headed}
+      COMPUTER_MAX_BROWSERS: ${COMPUTER_MAX_BROWSERS:-}
+      COMPUTER_BROWSER_IDLE_MS: ${COMPUTER_BROWSER_IDLE_MS:-}
+      COMPUTER_MEMORY_HIGH_PERCENT: ${COMPUTER_MEMORY_HIGH_PERCENT:-}
+      COMPUTER_TAB_IDLE_MS: ${COMPUTER_TAB_IDLE_MS:-}
+      COMPUTER_SEPARATE_WORKSPACES: 'on'
+    volumes:
+    - agent-workspace:/workspace
+    - agent-profiles:/profiles
+    stop_grace_period: 30s
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - bun -e "await fetch('http://localhost:4100/health')"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  supervisor:
+    build:
+      context: .
+      dockerfile: supervisor/Dockerfile
+    image: ${SUPERVISOR_IMAGE:-openbot-supervisor:latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-build}
+    environment:
+      PORT: '4300'
+      SUPERVISOR_TOKEN: ${SUPERVISOR_TOKEN:-}
+      COMPUTER_TOKEN: ${COMPUTER_TOKEN:-}
+      COMPUTER_BROWSER_MODE: ${COMPUTER_BROWSER_MODE:-headed}
+      COMPUTER_IMAGE: ${COMPUTER_IMAGE:-openbot-agent-computer:latest}
+      COMPUTER_NAMESPACE: ${COMPUTER_NAMESPACE:-openbot-coolify}
+      COMPUTER_NETWORK: ${COMPUTER_NETWORK:-openbot-coolify-computers}
+      COMPUTER_RUNTIME: ${COMPUTER_RUNTIME:-}
+      COMPUTER_MEMORY_BYTES: ${COMPUTER_MEMORY_BYTES:-}
+    volumes:
+    - type: bind
+      source: /var/run/docker.sock
+      target: /var/run/docker.sock
+      read_only: true
+      bind:
+        create_host_path: false
+    security_opt:
+    - label=disable
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - bun -e "await fetch('http://localhost:4300/health')"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      agent-computer:
+        condition: service_healthy
+  agent-bot:
+    build:
+      context: .
+      dockerfile: agent-bot/Dockerfile
+    image: ${BOT_IMAGE:-openbot-agent-bot:latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-build}
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      MANAGED_AGENT_TOKEN: ${MANAGED_AGENT_TOKEN:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      BOT_MODEL: ${AGENT_BOT_MODEL:-gpt-5.5}
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - bun -e "await fetch('http://localhost:4200/health')"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  agent-langgraph:
+    build:
+      context: .
+      dockerfile: agent-langgraph/Dockerfile
+    image: ${LANGGRAPH_IMAGE:-openbot-agent-langgraph:latest}
+    pull_policy: ${IMAGE_PULL_POLICY:-build}
+    environment:
+      BOT_PROVIDER: ${BOT_PROVIDER:-openai}
+      MANAGED_AGENT_TOKEN: ${MANAGED_AGENT_TOKEN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GOOGLE_GENERATIVE_AI_BASE_URL: ${GOOGLE_GENERATIVE_AI_BASE_URL:-}
+      BOT_MODEL: ${BOT_MODEL:-}
+      BOT_RESPONSES_API: ${BOT_RESPONSES_API:-false}
+      BOT_REASONING_EFFORT: ${BOT_REASONING_EFFORT:-}
+      OPENBOT_TOOL_URL: http://server:3001/api/agent-tools/call
+      AGENT_TOOL_TOKEN: ${AGENT_TOOL_TOKEN:-}
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - bun -e "await fetch('http://localhost:4201/health')"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+networks:
+  data:
+    internal: true
+  default:
+    name: ${COMPUTER_NETWORK:-openbot-coolify-computers}
+volumes:
+  postgres-data: null
+  agent-workspace: null
+  agent-profiles: null
