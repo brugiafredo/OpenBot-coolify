@@ -49,6 +49,26 @@ def main():
         assert 'build' not in service
     assert services['agent-computer']['pull_policy'] == 'always'
     assert services['supervisor']['environment']['COMPUTER_IMAGE'] == services['agent-computer']['image']
+    # Plan de ChatGPT: sin OPENAI_API_KEY obligatoria y con la sesión en un volumen compartido.
+    assert not re.search(r'\$\{OPENAI_API_KEY\}', text), 'OPENAI_API_KEY no puede ser obligatoria'
+    for gone in ('agent-bot', 'agent-langgraph'):
+        assert gone not in services, gone
+    harness, login, server = services['agent-harness'], services['chatgpt-login'], services['server']
+    store = '/root/.langchain/chatgpt-auth.json'
+    assert harness['environment']['CHATGPT_AUTH_FILE'] == store
+    assert server['environment']['CHATGPT_AUTH_FILE'] == store
+    assert 'chatgpt-auth:/root/.langchain' in harness['volumes']
+    assert 'chatgpt-auth:/root/.langchain' in login['volumes']
+    assert login['image'] == harness['image'] == server['environment']['PICKED_HARNESS_IMAGE']
+    assert re.search(r'(?:^|/)(?:openbot-)?agent-langgraph-agui(?::|@|$)', harness['image'].split(':-')[-1].rstrip('}'))
+    assert server['environment']['PICKED_HARNESS_URL'] == 'http://agent-harness:4206'
+    assert server['environment']['PICKED_HARNESS_SOURCE'] != 'byo'
+    assert not server['environment']['MANAGED_AGENT_AG_UI_URL']
+    assert server['depends_on']['agent-harness']['condition'] == 'service_healthy'
+    assert login['restart'] == 'no'
+    assert '$' not in ''.join(login['command']), 'Coolify interpolaría $ dentro del script de login'
+    for name, service in services.items():
+        assert 'chatgpt-login' not in service.get('depends_on', {}), name
     for valid in ('${NAME}', '${NAME:-default}', '${NAME:?msg}', '${NAME.with_dot}'):
         validate(valid)
     # Comprueba también que el validador detecta las formas que queremos evitar.
