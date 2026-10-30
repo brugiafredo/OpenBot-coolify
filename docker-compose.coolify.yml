@@ -1,5 +1,6 @@
 # Variante para Coolify v4. Véase COOLIFY.md antes del primer despliegue.
-# SPIRE y el harness elegido por el escritorio se omiten deliberadamente.
+# SPIRE se omite deliberadamente. Los Bots piensan con el plan de ChatGPT de la cuenta
+# conectada mediante chatgpt-login (CHATGPT_AUTH_FILE), no con OPENAI_API_KEY.
 # La red default tiene nombre explícito para los contenedores creados por el supervisor.
 # Sin puertos publicados: asignar el dominio a server, puerto interno 3001.
 services:
@@ -44,7 +45,15 @@ services:
       DATABASE_URL: postgres://openbot:${POSTGRES_PASSWORD:-}@postgres:5432/openbot
       AGENT_COMPUTER_URL: http://agent-computer:4100
       COMPUTER_SUPERVISOR_URL: http://supervisor:4300
-      MANAGED_AGENT_AG_UI_URL: http://agent-langgraph:4201/ag-ui
+      MANAGED_AGENT_AG_UI_URL: ''
+      PICKED_HARNESS_URL: http://agent-harness:4206
+      PICKED_HARNESS_IMAGE: ${HARNESS_IMAGE:-ghcr.io/copilotkit/openbot-agent-langgraph-agui:v0.2.0}
+      PICKED_HARNESS_SOURCE: installed
+      PICKED_HARNESS_KIND: remote-ag-ui
+      PICKED_HARNESS_NAME: ${PICKED_HARNESS_NAME:-LangGraph}
+      PICKED_HARNESS_PORT: '4206'
+      AGENT_ENDPOINT_ALLOWED_HOSTS: agent-harness:4206
+      CHATGPT_AUTH_FILE: /root/.langchain/chatgpt-auth.json
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       INTELLIGENCE_API_URL: ${INTELLIGENCE_API_URL:-https://api.intelligence.copilotkit.ai}
       INTELLIGENCE_GATEWAY_WS_URL: ${INTELLIGENCE_GATEWAY_WS_URL:-wss://realtime.intelligence.copilotkit.ai}
@@ -88,7 +97,7 @@ services:
         condition: service_completed_successfully
       supervisor:
         condition: service_healthy
-      agent-langgraph:
+      agent-harness:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
@@ -176,45 +185,113 @@ services:
     depends_on:
       agent-computer:
         condition: service_healthy
-  agent-bot:
-    image: ${BOT_IMAGE:-ghcr.io/brugiafredo/openbot-agent-bot:latest}
+  agent-harness:
+    image: ${HARNESS_IMAGE:-ghcr.io/copilotkit/openbot-agent-langgraph-agui:v0.2.0}
     pull_policy: always
     environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      PORT: '4206'
       MANAGED_AGENT_TOKEN: ${MANAGED_AGENT_TOKEN:-}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
-      BOT_MODEL: ${AGENT_BOT_MODEL:-gpt-5.5}
-    healthcheck:
-      test:
-      - CMD-SHELL
-      - bun -e "await fetch('http://localhost:4200/health')"
-      interval: 10s
-      timeout: 5s
-      retries: 5
-  agent-langgraph:
-    image: ${LANGGRAPH_IMAGE:-ghcr.io/brugiafredo/openbot-agent-langgraph:latest}
-    pull_policy: always
-    environment:
-      BOT_PROVIDER: ${BOT_PROVIDER:-openai}
-      MANAGED_AGENT_TOKEN: ${MANAGED_AGENT_TOKEN:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      GOOGLE_GENERATIVE_AI_BASE_URL: ${GOOGLE_GENERATIVE_AI_BASE_URL:-}
-      BOT_MODEL: ${BOT_MODEL:-}
-      BOT_RESPONSES_API: ${BOT_RESPONSES_API:-false}
-      BOT_REASONING_EFFORT: ${BOT_REASONING_EFFORT:-}
       OPENBOT_TOOL_URL: http://server:3001/api/agent-tools/call
       AGENT_TOOL_TOKEN: ${AGENT_TOOL_TOKEN:-}
+      CHATGPT_AUTH_FILE: /root/.langchain/chatgpt-auth.json
+      BOT_MODEL: ${BOT_MODEL:-gpt-6.1-sol}
+    volumes:
+    - chatgpt-auth:/root/.langchain
+    restart: unless-stopped
     healthcheck:
       test:
-      - CMD-SHELL
-      - bun -e "await fetch('http://localhost:4201/health')"
+      - CMD
+      - python
+      - -c
+      - import urllib.request; urllib.request.urlopen('http://127.0.0.1:4206/health', timeout=4)
       interval: 10s
       timeout: 5s
       retries: 5
+  chatgpt-login:
+    image: ${HARNESS_IMAGE:-ghcr.io/copilotkit/openbot-agent-langgraph-agui:v0.2.0}
+    pull_policy: always
+    restart: 'no'
+    volumes:
+    - chatgpt-auth:/root/.langchain
+    command:
+    - python
+    - -u
+    - -c
+    - |
+      import json, logging, sys
+      from pathlib import Path
+
+      logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
+      logging.getLogger("httpx").setLevel(logging.WARNING)
+      logging.getLogger("httpcore").setLevel(logging.WARNING)
+      STORE = Path("/root/.langchain/chatgpt-auth.json")
+      IMPORT = Path("/root/.langchain/codex-auth.json")
+      if STORE.exists() and STORE.stat().st_size > 0:
+          print("ChatGPT ya está conectado: no hay nada que hacer.")
+          sys.exit(0)
+      from langchain_openai import chatgpt_oauth as oauth
+      if IMPORT.exists():
+          raw = json.loads(IMPORT.read_text())
+          tokens = raw.get("tokens") or raw
+          claims = oauth._extract_chatgpt_claims(tokens.get("id_token"))
+          expiry = oauth.decode_jwt_claims(tokens["access_token"]).get("exp") or 0
+          token = oauth._deserialize_token({
+              "access_token": tokens["access_token"],
+              "refresh_token": tokens["refresh_token"],
+              "expires_at": expiry,
+              "account_id": tokens.get("account_id") or claims.get("account_id"),
+              "plan_type": claims.get("plan_type"),
+              "user_id": claims.get("user_id"),
+              "id_token": tokens.get("id_token"),
+          })
+          oauth._FileChatGPTOAuthTokenProvider(path=STORE).save(token)
+          IMPORT.unlink()
+          print("Sesión de ChatGPT importada desde codex-auth.json (archivo de origen borrado).")
+          sys.exit(0)
+      import time
+      import httpx
+
+      # El mismo flujo de dispositivo que "codex login --device-auth". login_chatgpt_device de
+      # langchain-openai envía un formulario que auth.openai.com ya rechaza (400), por eso va aquí.
+      ISSUER = "https://auth.openai.com"
+      client = httpx.Client(timeout=30)
+      for attempt in range(4):
+          start = client.post(ISSUER + "/api/accounts/deviceauth/usercode", json={"client_id": oauth.CHATGPT_CLIENT_ID})
+          start.raise_for_status()
+          start = start.json()
+          interval = max(int(start.get("interval") or 5), 3)
+          print("")
+          print("=== INICIO DE SESIÓN DE CHATGPT ===")
+          print("1. Abre: " + ISSUER + "/codex/device")
+          print("2. Introduce el código: " + start["user_code"])
+          print("El código caduca en 15 minutos.")
+          print("")
+          deadline = time.monotonic() + 900
+          granted = None
+          while time.monotonic() < deadline:
+              time.sleep(interval)
+              poll = client.post(ISSUER + "/api/accounts/deviceauth/token", json={"device_auth_id": start["device_auth_id"], "user_code": start["user_code"]})
+              if poll.status_code == 200:
+                  granted = poll.json()
+                  break
+              if poll.status_code not in (403, 404, 429):
+                  print("Error del servidor de OpenAI al esperar la autorización: " + str(poll.status_code))
+                  sys.exit(1)
+          if not granted:
+              print("El código ha caducado; se genera uno nuevo.")
+              continue
+          response = oauth._post_form(oauth.CHATGPT_TOKEN_URL, {
+              "grant_type": "authorization_code",
+              "code": granted["authorization_code"],
+              "redirect_uri": oauth.CHATGPT_DEVICE_REDIRECT_URI,
+              "client_id": oauth.CHATGPT_CLIENT_ID,
+              "code_verifier": granted["code_verifier"],
+          })
+          oauth._FileChatGPTOAuthTokenProvider(path=STORE).save(oauth._token_from_response(response))
+          print("ChatGPT conectado. El token se guarda en el volumen chatgpt-auth.")
+          sys.exit(0)
+      print("No se completó el inicio de sesión. Reinicia el servicio chatgpt-login para intentarlo de nuevo.")
+      sys.exit(1)
 networks:
   data:
     internal: true
@@ -224,3 +301,4 @@ volumes:
   postgres-data: null
   agent-workspace: null
   agent-profiles: null
+  chatgpt-auth: null
