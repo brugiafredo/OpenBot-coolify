@@ -8,8 +8,8 @@ import re
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-NAME = r"[A-Za-z_][A-Za-z0-9_]*"
-EXPRESSION = re.compile(r"(" + NAME + r")(?:\:-([^${}]*))?")
+NAME = r"[A-Za-z_][A-Za-z0-9_.]*"
+EXPRESSION = re.compile(r"(" + NAME + r")(?::[-?]([^${}]*))?")
 
 
 def validate(text):
@@ -25,7 +25,7 @@ def validate(text):
             raise ValueError(f"Interpolación sin cerrar en posición {start}")
         body = text[start + 2:end]
         match = EXPRESSION.fullmatch(body)
-        if not match or ':+' in body or ':?' in body:
+        if not match or ':+' in body:
             raise ValueError(f"Interpolación no admitida: {body!r}")
         names.add(match[1])
         count += 1
@@ -45,8 +45,14 @@ def main():
             assert dependency in services, (name, dependency)
     assert services['server']['environment']['NODE_ENV'] == 'production'
     assert services['supervisor']['environment']['COMPUTER_NETWORK'] == document['networks']['default']['name']
+    for service in services.values():
+        assert 'build' not in service
+    assert services['agent-computer']['pull_policy'] == 'always'
+    assert services['supervisor']['environment']['COMPUTER_IMAGE'] == services['agent-computer']['image']
+    for valid in ('${NAME}', '${NAME:-default}', '${NAME:?msg}', '${NAME.with_dot}'):
+        validate(valid)
     # Comprueba también que el validador detecta las formas que queremos evitar.
-    for invalid in ('${OUTER:-${INNER:-}}', '${VAR:+value}', '${VAR:?error}', '${9BAD}', '${UNCLOSED'):
+    for invalid in ('${OUTER:-${INNER:-}}', '${VAR:+value}', '${9BAD}', '${UNCLOSED'):
         try:
             validate(invalid)
         except ValueError:

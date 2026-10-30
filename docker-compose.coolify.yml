@@ -21,11 +21,8 @@ services:
     networks:
     - data
   migrate:
-    build:
-      context: .
-      dockerfile: server/Dockerfile
-    image: ${SERVER_IMAGE:-openbot-server:latest}
-    pull_policy: ${IMAGE_PULL_POLICY:-build}
+    image: ${SERVER_IMAGE:-ghcr.io/brugiafredo/openbot-server:latest}
+    pull_policy: always
     command:
     - bun
     - scripts/migrate.ts
@@ -38,11 +35,8 @@ services:
     networks:
     - data
   server:
-    build:
-      context: .
-      dockerfile: server/Dockerfile
-    image: ${SERVER_IMAGE:-openbot-server:latest}
-    pull_policy: ${IMAGE_PULL_POLICY:-build}
+    image: ${SERVER_IMAGE:-ghcr.io/brugiafredo/openbot-server:latest}
+    pull_policy: always
     environment:
       PORT: '3001'
       SERVER_PORT: '3001'
@@ -111,11 +105,8 @@ services:
     expose:
     - '3001'
   worker:
-    build:
-      context: .
-      dockerfile: server/Dockerfile
-    image: ${SERVER_IMAGE:-openbot-server:latest}
-    pull_policy: ${IMAGE_PULL_POLICY:-build}
+    image: ${SERVER_IMAGE:-ghcr.io/brugiafredo/openbot-server:latest}
+    pull_policy: always
     command:
     - bun
     - ../worker/src/index.ts
@@ -132,11 +123,8 @@ services:
     networks:
     - data
   agent-computer:
-    build:
-      context: .
-      dockerfile: agent-computer/Dockerfile
-    image: ${COMPUTER_IMAGE:-openbot-agent-computer:latest}
-    pull_policy: ${IMAGE_PULL_POLICY:-build}
+    image: ${COMPUTER_IMAGE:-ghcr.io/brugiafredo/openbot-agent-computer:latest}
+    pull_policy: always
     environment:
       COMPUTER_TOKEN: ${COMPUTER_TOKEN:-}
       COMPUTER_BROWSER_MODE: ${COMPUTER_BROWSER_MODE:-headed}
@@ -157,17 +145,14 @@ services:
       timeout: 5s
       retries: 5
   supervisor:
-    build:
-      context: .
-      dockerfile: supervisor/Dockerfile
-    image: ${SUPERVISOR_IMAGE:-openbot-supervisor:latest}
-    pull_policy: ${IMAGE_PULL_POLICY:-build}
+    image: ${SUPERVISOR_IMAGE:-ghcr.io/brugiafredo/openbot-supervisor:latest}
+    pull_policy: always
     environment:
       PORT: '4300'
       SUPERVISOR_TOKEN: ${SUPERVISOR_TOKEN:-}
       COMPUTER_TOKEN: ${COMPUTER_TOKEN:-}
       COMPUTER_BROWSER_MODE: ${COMPUTER_BROWSER_MODE:-headed}
-      COMPUTER_IMAGE: ${COMPUTER_IMAGE:-openbot-agent-computer:latest}
+      COMPUTER_IMAGE: ${COMPUTER_IMAGE:-ghcr.io/brugiafredo/openbot-agent-computer:latest}
       COMPUTER_NAMESPACE: ${COMPUTER_NAMESPACE:-openbot-coolify}
       COMPUTER_NETWORK: ${COMPUTER_NETWORK:-openbot-coolify-computers}
       COMPUTER_RUNTIME: ${COMPUTER_RUNTIME:-}
@@ -192,11 +177,8 @@ services:
       agent-computer:
         condition: service_healthy
   agent-bot:
-    build:
-      context: .
-      dockerfile: agent-bot/Dockerfile
-    image: ${BOT_IMAGE:-openbot-agent-bot:latest}
-    pull_policy: ${IMAGE_PULL_POLICY:-build}
+    image: ${BOT_IMAGE:-ghcr.io/brugiafredo/openbot-agent-bot:latest}
+    pull_policy: always
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       MANAGED_AGENT_TOKEN: ${MANAGED_AGENT_TOKEN:-}
@@ -210,11 +192,8 @@ services:
       timeout: 5s
       retries: 5
   agent-langgraph:
-    build:
-      context: .
-      dockerfile: agent-langgraph/Dockerfile
-    image: ${LANGGRAPH_IMAGE:-openbot-agent-langgraph:latest}
-    pull_policy: ${IMAGE_PULL_POLICY:-build}
+    image: ${LANGGRAPH_IMAGE:-ghcr.io/brugiafredo/openbot-agent-langgraph:latest}
+    pull_policy: always
     environment:
       BOT_PROVIDER: ${BOT_PROVIDER:-openai}
       MANAGED_AGENT_TOKEN: ${MANAGED_AGENT_TOKEN:-}

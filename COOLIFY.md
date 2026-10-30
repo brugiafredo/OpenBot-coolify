@@ -4,6 +4,45 @@ Este despliegue ejecuta la API y la app compilada en `server`, y las rutinas en
 `worker`. No utiliza `scripts/start.sh`: ese script arranca procesos en el host,
 genera secretos locales y selecciona servicios para desarrollo.
 
+## Imágenes en GHCR y orden de despliegue
+
+GitHub Actions compila y publica las cinco imágenes en GHCR. Coolify solo las descarga;
+no compila en el servidor de 2 vCPU y 4 GB de RAM. El workflow usa `GITHUB_TOKEN`,
+sin añadir secretos, y publica imágenes para `linux/amd64`.
+
+1. Fusiona la PR en `main`.
+2. En la pestaña **Actions**, espera a que termine **Build images**. La primera
+   ejecución tarda aproximadamente 20-40 minutos; las siguientes suelen ser más
+   rápidas gracias a la caché. También puedes lanzarlo con **Run workflow**.
+3. Haz públicos los cinco paquetes de GHCR: **Profile -> Packages -> package ->
+   Package settings -> Change visibility -> Public**. Sus nombres son
+   `openbot-server`, `openbot-agent-computer`, `openbot-supervisor`, `openbot-agent-bot`
+   y `openbot-agent-langgraph`, bajo `ghcr.io/brugiafredo`.
+   Como alternativa, mantenlos privados y añade las credenciales del registro en
+   Coolify, en **Servers -> tu servidor**, dentro de la configuración de registros
+   disponible en tu versión. También puedes ejecutar `docker login ghcr.io` en el
+   servidor con un PAT con permiso `read:packages` y acceso a los paquetes.
+   Con paquetes privados, el host debe estar autenticado también para descargar
+   `agent-computer`; comprueba que las credenciales están disponibles para el usuario
+   que ejecuta los despliegues de Coolify. No guardes el PAT en el repositorio.
+4. En Coolify, pulsa **Reload Compose File** y después **Redeploy**.
+
+Todos los servicios de aplicación usan `pull_policy: always`. `agent-computer` es un
+servicio real, con comprobación de salud y volúmenes, y descarga la imagen antes de
+que arranque `supervisor`, que depende de él. El supervisor recibe exactamente la
+misma `COMPUTER_IMAGE` y utiliza el socket Docker del host para crear los ordenadores
+de los Bots. Su código inspecciona y crea contenedores, pero no descarga imágenes:
+la descarga previa de Compose es necesaria. No necesita un PAT dentro del contenedor.
+Si borras la imagen del host, vuelve a desplegar antes de crear nuevos ordenadores.
+
+Puedes sobrescribir `SERVER_IMAGE`, `COMPUTER_IMAGE`, `SUPERVISOR_IMAGE`, `BOT_IMAGE`
+y `LANGGRAPH_IMAGE` en Coolify. Para fijar una versión, usa por ejemplo
+`SERVER_IMAGE=ghcr.io/brugiafredo/openbot-server:sha-<SHA completo del commit>` y fija
+las otras cuatro imágenes al mismo SHA. `migrate`, `server` y `worker` comparten
+`SERVER_IMAGE`; el servicio de ordenador y el supervisor comparten `COMPUTER_IMAGE`.
+En un fork, Actions utiliza el propietario del repositorio en minúsculas; cambia las
+cinco variables para apuntar a sus paquetes.
+
 ## Configuración en Coolify
 
 1. Crea una aplicación desde este repositorio y selecciona el build pack **Docker Compose**.
@@ -19,7 +58,7 @@ genera secretos locales y selecciona servicios para desarrollo.
    origen. No asignes dominios a Postgres, supervisor ni agentes.
 5. Configura OAuth antes del primer arranque público. Registra el callback
    `https://openbot.example.com/api/auth/callback/google` (o `microsoft` / `okta`).
-6. Despliega. Revisa que `migrate` termine con código 0, que `server` esté saludable
+6. Sigue el orden de publicación anterior y despliega. Revisa que `migrate` termine con código 0, que `server` esté saludable
    y que `worker` permanezca activo. Comprueba `/health`, el inicio de sesión, un chat,
    una herramienta de navegador y una rutina. Los contenedores de migración terminados
    son normales; el worker no tiene endpoint HTTP de salud.
@@ -83,8 +122,7 @@ verifique la identidad y los roles; consulta `docs/configuration.md` antes de us
 | `COMPUTER_MEMORY_BYTES` | Límite de RAM de cada ordenador dinámico; vacío usa el comportamiento del supervisor. |
 | `COMPUTER_BROWSER_MODE` | `headed` por defecto; `headless` reduce necesidades gráficas. Se aplica también a los ordenadores dinámicos. |
 | `COMPUTER_MAX_BROWSERS`, `COMPUTER_BROWSER_IDLE_MS`, `COMPUTER_MEMORY_HIGH_PERCENT`, `COMPUTER_TAB_IDLE_MS` | Ajustes del ordenador compartido, con los valores por defecto del programa al dejarlos vacíos. El supervisor actual no reenvía estos cuatro ajustes a los ordenadores dinámicos. |
-| `SERVER_IMAGE`, `COMPUTER_IMAGE`, `SUPERVISOR_IMAGE`, `BOT_IMAGE`, `LANGGRAPH_IMAGE` | Etiquetas de las imágenes construidas desde este repo. El supervisor necesita exactamente la misma `COMPUTER_IMAGE` que construye `agent-computer`. |
-| `IMAGE_PULL_POLICY` | `build` por defecto. Si eliges otra política, asegúrate de que las imágenes existen y corresponden al mismo código; el archivo conserva `build`. |
+| `SERVER_IMAGE`, `COMPUTER_IMAGE`, `SUPERVISOR_IMAGE`, `BOT_IMAGE`, `LANGGRAPH_IMAGE` | Referencias GHCR opcionales, por defecto `ghcr.io/brugiafredo/openbot-<servicio>:latest`. Admiten etiquetas `sha-<SHA completo>`; `COMPUTER_IMAGE` se comparte con el supervisor. |
 | `OPENBOT_SERVER_USER` | `1001:1001`; normalmente no hay que cambiarlo. |
 | `COMPOSIO_API_KEY` | Activa el broker de integraciones compartido. |
 | `CPK_INTELLIGENCE_LEARNING_CONTAINER_ID`, `CPK_INTELLIGENCE_SKILLS_REVISION` | Contenedor de aprendizaje ya provisionado y revisión de skills opcional. El despliegue no ejecuta el setup de aprendizaje de `start.sh`. |
@@ -101,7 +139,7 @@ su entrada a `environment` del servicio que la necesita. Lo mismo se aplica a
 
 El archivo original contiene valores anidados y operadores de sustitución condicional.
 Si el extractor de Coolify los interpreta como parte del nombre de una variable,
-genera una clave que incumple su validador y falla antes de construir imágenes.
+genera una clave que incumple su validador y falla antes de arrancar los servicios.
 Es una explicación compatible con el error observado, no una reproducción confirmada
 sin acceso a la versión y los logs de esa instancia. La documentación actual de
 Coolify sí contempla anidación; no es una prohibición general de Docker Compose ni
@@ -161,8 +199,8 @@ un runtime aislado. La división de redes no sustituye el aislamiento del host.
 No actives `AGENT_COMPUTER_ALLOW_PRIVATE_HOSTS`: es una excepción local que el
 servidor rechaza con `NODE_ENV=production`, y no hace falta para llamar al supervisor.
 
-Se construyen varias imágenes, incluida Chromium y la app; reserva RAM, CPU, disco
-y tiempo de build suficientes. Cada ordenador activo añade navegadores y consumo
+Las imágenes se compilan en GitHub Actions. Reserva disco para descargarlas y RAM
+para ejecutarlas, especialmente Chromium. Cada ordenador activo añade navegadores y consumo
 propio. Mide el uso antes de aumentar concurrencia. Los límites de recursos que
 apliques al servicio supervisor en Coolify no se heredan por sus contenedores;
 `COMPUTER_MEMORY_BYTES` controla la memoria de estos. Un despliegue del stack tampoco
