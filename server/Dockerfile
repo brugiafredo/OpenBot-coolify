@@ -72,6 +72,10 @@ COPY server server
 COPY shared shared
 COPY toolkit toolkit
 COPY examples examples
+# server/src/computer/policy-network.ts imports the egress rules from agent-computer by relative path
+# (`../../../agent-computer/src/egress`), so the server cannot boot without that source beside it.
+# Only node builtins and shared/ are imported from there, so no agent-computer node_modules needed.
+COPY agent-computer/src agent-computer/src
 # Its source and manifest, not its tests. Run it with `bun ../worker/src/index.ts` from the working
 # directory below; it reaches the server's source by relative import, so it needs `server/` beside
 # it, which is already here.
